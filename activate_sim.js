@@ -21,7 +21,7 @@ const logger = winston.createLogger({
 const app = express();
 const port = process.env.PORT || 10000; // Render 預設端口 10000
 
-// 簡單的健康檢查端點
+// 健康檢查端點
 app.get('/health', (req, res) => {
   res.status(200).send('Server is running');
 });
@@ -30,7 +30,7 @@ app.get('/health', (req, res) => {
 app.get('/start', async (req, res) => {
   res.status(200).send('ICCID processing started. Check logs for progress.');
   logger.info('Received /start request, beginning ICCID processing');
-  await main(); // 觸發 ICCID 處理
+  await main();
 });
 
 // 讀取配置
@@ -224,13 +224,15 @@ async function main(maxWorkers = 1) {
   }
 }
 
-// 啟動伺服器並自動觸發 ICCID 處理
-app.listen(port, () => {
+// 啟動伺服器並延遲自動觸發 ICCID 處理
+app.listen(port, '0.0.0.0', () => {
   logger.info(`Server running on port ${port}`);
-  // 自動觸發 ICCID 處理
-  logger.info('Auto-starting ICCID processing on server startup');
-  main().catch(err => {
-    logger.error(`Auto-start error: ${err.message}`);
-    process.exit(1);
-  });
+  // 延遲 5 秒啟動 ICCID 處理，確保 Render 檢測到端口
+  setTimeout(() => {
+    logger.info('Auto-starting ICCID processing after delay');
+    main().catch(err => {
+      logger.error(`Auto-start error: ${err.message}`);
+      process.exit(1);
+    });
+  }, 5000);
 });
