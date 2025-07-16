@@ -1,0 +1,13 @@
+{
+  "name": "sim-activation",
+  "version": "1.0.0",
+  "dependencies": {
+    "playwright": "^1.47.0",
+    "csv-parse": "^5.5.6",
+    "csv-writer": "^1.6.0",
+    "winston": "^3.14.2"
+  },
+  "scripts": {
+    "start": "node activate_sim.js"
+  }
+}

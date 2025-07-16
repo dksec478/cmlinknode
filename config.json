@@ -1,0 +1,9 @@
+{
+    "url": "https://www.cmlink.com/uk/en/datasim/activate/",
+    "chromedriver_path": "C:/Users/OWNER/Desktop/CMLINK/chromedriver.exe",
+    "selectors": {
+        "iccid_input": "el-input__inner",
+        "next_button": "//*[@id='app']/div[1]/div[2]/div[2]/form/button",
+        "activate_button": "button.el-button.submit.el-button--primary"
+    }
+}
