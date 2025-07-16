@@ -3,7 +3,6 @@ const fs = require('fs').promises;
 const csv = require('csv-parse/sync');
 const createCsvWriter = require('csv-writer').createObjectCsvWriter;
 const winston = require('winston');
-const { Pool } = require('pg'); // 可選，用於持久化存儲
 
 // 配置日誌
 const logger = winston.createLogger({
