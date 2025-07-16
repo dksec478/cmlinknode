@@ -2,6 +2,7 @@ const { chromium } = require('playwright');
 const fs = require('fs').promises;
 const csv = require('csv-parse/sync');
 const winston = require('winston');
+const express = require('express');
 
 // 配置日誌
 const logger = winston.createLogger({
@@ -12,8 +13,24 @@ const logger = winston.createLogger({
   ),
   transports: [
     new winston.transports.File({ filename: 'activation.log' }), // 寫入文件
-    new winston.transports.Console() // 同時輸出到控制台，供 Render 日誌查看
+    new winston.transports.Console() // 輸出到控制台，供 Render 日誌查看
   ]
+});
+
+// 配置 Express
+const app = express();
+const port = process.env.PORT || 10000; // Render 預設端口 10000
+
+// 簡單的健康檢查端點
+app.get('/health', (req, res) => {
+  res.status(200).send('Server is running');
+});
+
+// 啟動 ICCID 處理的端點
+app.get('/start', async (req, res) => {
+  res.status(200).send('ICCID processing started. Check logs for progress.');
+  logger.info('Received /start request, beginning ICCID processing');
+  await main(); // 觸發 ICCID 處理
 });
 
 // 讀取配置
@@ -152,7 +169,7 @@ async function processIccid(iccid, maxRetries = 2) {
   return result;
 }
 
-// 主函數
+// 主處理函數
 async function main(maxWorkers = 1) {
   try {
     const iccids = await loadIccids();
@@ -207,8 +224,13 @@ async function main(maxWorkers = 1) {
   }
 }
 
-// 執行主函數
-main().catch(err => {
-  logger.error(`Main process error: ${err.message}`);
-  process.exit(1);
+// 啟動伺服器並自動觸發 ICCID 處理
+app.listen(port, () => {
+  logger.info(`Server running on port ${port}`);
+  // 自動觸發 ICCID 處理
+  logger.info('Auto-starting ICCID processing on server startup');
+  main().catch(err => {
+    logger.error(`Auto-start error: ${err.message}`);
+    process.exit(1);
+  });
 });
