@@ -1,7 +1,6 @@
 const { chromium } = require('playwright');
 const fs = require('fs').promises;
 const csv = require('csv-parse/sync');
-const createCsvWriter = require('csv-writer').createObjectCsvWriter;
 const winston = require('winston');
 
 // 配置日誌
@@ -11,7 +10,10 @@ const logger = winston.createLogger({
     winston.format.timestamp(),
     winston.format.printf(({ timestamp, level, message }) => `${timestamp} - ${level} - ${message}`)
   ),
-  transports: [new winston.transports.File({ filename: 'activation.log' })]
+  transports: [
+    new winston.transports.File({ filename: 'activation.log' }), // 寫入文件
+    new winston.transports.Console() // 同時輸出到控制台，供 Render 日誌查看
+  ]
 });
 
 // 讀取配置
@@ -19,11 +21,17 @@ const config = require('./config.json');
 
 // 讀取 ICCID
 async function loadIccids() {
-  const fileContent = await fs.readFile('iccids.csv', 'utf-8');
-  const iccids = csv.parse(fileContent, { columns: true, skip_empty_lines: true })
-    .map(row => row.iccid)
-    .filter((value, index, self) => self.indexOf(value) === index); // 去重
-  return iccids;
+  try {
+    const fileContent = await fs.readFile('iccids.csv', 'utf-8');
+    const iccids = csv.parse(fileContent, { columns: true, skip_empty_lines: true })
+      .map(row => row.iccid)
+      .filter((value, index, self) => self.indexOf(value) === index); // 去重
+    logger.info(`Loaded ${iccids.length} unique ICCIDs`);
+    return iccids;
+  } catch (err) {
+    logger.error(`Failed to load iccids.csv: ${err.message}`);
+    throw err;
+  }
 }
 
 // 初始化瀏覽器
@@ -39,6 +47,12 @@ async function initBrowser() {
     ]
   });
   const context = await browser.newContext({ ignoreHTTPSErrors: true });
+  await context.addInitScript({
+    content: `
+      Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+      window.navigator.chrome = { runtime: {} };
+    `
+  });
   return { browser, context };
 }
 
@@ -57,6 +71,10 @@ async function processIccid(iccid, maxRetries = 2) {
         await page.goto(config.url, { waitUntil: 'domcontentloaded', timeout: 30000 });
         logger.info(`Page title: ${await page.title()}, URL: ${page.url()}`);
 
+        // 模擬隨機滑鼠移動
+        await page.mouse.move(Math.random() * 800, Math.random() * 600);
+        await page.waitForTimeout(Math.random() * 300 + 200); // 隨機延遲 200-500ms
+
         // 輸入 ICCID
         await page.waitForSelector(`.${config.selectors.iccid_input}`, { timeout: 30000 });
         await page.fill(`.${config.selectors.iccid_input}`, iccid);
@@ -64,7 +82,7 @@ async function processIccid(iccid, maxRetries = 2) {
 
         // 模擬滾動
         await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
-        await page.waitForTimeout(Math.random() * 300 + 200); // 隨機延遲 200-500ms
+        await page.waitForTimeout(Math.random() * 300 + 200);
 
         // 點擊 Next Step
         await page.waitForSelector(config.selectors.next_button, { timeout: 30000 });
@@ -135,43 +153,58 @@ async function processIccid(iccid, maxRetries = 2) {
 }
 
 // 主函數
-async function main(maxWorkers = 3) {
-  const iccids = await loadIccids();
-  const results = [];
-  const pool = new Array(maxWorkers).fill().map(() => Promise.resolve());
+async function main(maxWorkers = 1) {
+  try {
+    const iccids = await loadIccids();
+    const results = [];
+    const totalIccids = iccids.length;
+    let processedCount = 0;
 
-  for (const iccid of iccids) {
-    const worker = pool.shift();
-    pool.push(
-      worker.then(async () => {
-        const result = await processIccid(iccid);
-        results.push(result);
-        return result;
-      })
-    );
+    logger.info(`Starting to process ${totalIccids} ICCIDs`);
+
+    const pool = new Array(maxWorkers).fill().map(() => Promise.resolve());
+
+    for (const iccid of iccids) {
+      const worker = pool.shift();
+      pool.push(
+        worker.then(async () => {
+          const result = await processIccid(iccid);
+          results.push(result);
+          processedCount++;
+          logger.info(`Progress: ${processedCount}/${totalIccids} ICCIDs processed (${((processedCount / totalIccids) * 100).toFixed(2)}%)`);
+          return result;
+        })
+      );
+    }
+
+    await Promise.all(pool);
+    logger.info(`Completed processing ${processedCount}/${totalIccids} ICCIDs`);
+
+    // 記錄無效 ICCID
+    const invalidIccids = results.filter(r => r.status === 'invalid_iccid').map(r => ({ iccid: r.iccid }));
+    if (invalidIccids.length > 0) {
+      logger.info('Invalid ICCIDs:', JSON.stringify(invalidIccids, null, 2));
+    } else {
+      logger.info('No invalid ICCIDs found');
+    }
+
+    // 記錄所有結果
+    logger.info('All Results:', JSON.stringify(results, null, 2));
+
+    // 記錄最終結果摘要
+    const summary = {
+      total: totalIccids,
+      success: results.filter(r => r.status === 'success').length,
+      already_activated: results.filter(r => r.status === 'already_activated').length,
+      processing: results.filter(r => r.status === 'processing').length,
+      invalid: results.filter(r => r.status === 'invalid_iccid').length,
+      failed: results.filter(r => r.status === 'activation_failed' || r.status === 'error').length
+    };
+    logger.info('Summary:', JSON.stringify(summary, null, 2));
+  } catch (err) {
+    logger.error(`Main process error: ${err.message}`);
+    throw err;
   }
-
-  await Promise.all(pool);
-
-  // 保存無效 ICCID
-  const invalidIccids = results.filter(r => r.status === 'invalid_iccid').map(r => ({ iccid: r.iccid }));
-  if (invalidIccids.length > 0) {
-    const csvWriter = createCsvWriter({ path: 'invalid_iccids.csv', header: [{ id: 'iccid', title: 'iccid' }] });
-    await csvWriter.writeRecords(invalidIccids);
-    logger.info('Invalid ICCIDs saved to invalid_iccids.csv');
-  }
-
-  // 保存所有結果
-  const csvWriter = createCsvWriter({
-    path: 'activation_results.csv',
-    header: [
-      { id: 'iccid', title: 'iccid' },
-      { id: 'status', title: 'status' },
-      { id: 'error_detail', title: 'error_detail' }
-    ]
-  });
-  await csvWriter.writeRecords(results);
-  logger.info('Results saved to activation_results.csv');
 }
 
 // 執行主函數
