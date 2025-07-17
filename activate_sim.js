@@ -169,25 +169,22 @@ async function processIccid(iccid, maxRetries = 2) {
   return result;
 }
 
-// 主處理函數
-async function main(maxWorkers = 1) {
-  try {
-    const iccids = await loadIccids();
-    const results = [];
-    const totalIccids = iccids.length;
-    let processedCount = 0;
-
-    logger.info(`Starting to process ${totalIccids} ICCIDs`);
-
+// 分批處理 ICCID
+async function processBatch(iccids, batchSize = 100, maxWorkers = 1) {
+  const results = [];
+  for (let i = 0; i < iccids.length; i += batchSize) {
+    const batch = iccids.slice(i, i + batchSize);
+    logger.info(`Processing batch ${Math.floor(i / batchSize) + 1} of ${Math.ceil(iccids.length / batchSize)} (${batch.length} ICCIDs)`);
     const pool = new Array(maxWorkers).fill().map(() => Promise.resolve());
 
-    for (const iccid of iccids) {
+    for (const iccid of batch) {
       const worker = pool.shift();
       pool.push(
         worker.then(async () => {
           const result = await processIccid(iccid);
           results.push(result);
-          processedCount++;
+          const processedCount = results.length;
+          const totalIccids = iccids.length;
           logger.info(`Progress: ${processedCount}/${totalIccids} ICCIDs processed (${((processedCount / totalIccids) * 100).toFixed(2)}%)`);
           return result;
         })
@@ -195,7 +192,22 @@ async function main(maxWorkers = 1) {
     }
 
     await Promise.all(pool);
-    logger.info(`Completed processing ${processedCount}/${totalIccids} ICCIDs`);
+    logger.info(`Completed batch ${Math.floor(i / batchSize) + 1}`);
+  }
+  return results;
+}
+
+// 主處理函數
+async function main() {
+  try {
+    const iccids = await loadIccids();
+    const totalIccids = iccids.length;
+    logger.info(`Starting to process ${totalIccids} ICCIDs`);
+
+    // 分批處理，每批 100 個 ICCID
+    const results = await processBatch(iccids, 100, 1);
+
+    logger.info(`Completed processing ${results.length}/${totalIccids} ICCIDs`);
 
     // 記錄無效 ICCID
     const invalidIccids = results.filter(r => r.status === 'invalid_iccid').map(r => ({ iccid: r.iccid }));
